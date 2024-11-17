@@ -1,3 +1,4 @@
+#include <cmath>
 #include <torch/extension.h>
 #include <ATen/ATen.h>
 #include <iostream>
@@ -27,11 +28,22 @@ inline void twoDimWrite(std::vector<float> &tensor, int &x, int &y, const int &s
 // Step #2: Implement Read/Write Accessors for a 4D Tensor
 inline float fourDimRead(std::vector<float> &tensor, int &x, int &y, int &z, int &b, 
         const int &sizeX, const int &sizeY, const int &sizeZ) {
+  int z_count = z * sizeZ;
+  int y_count = y * sizeY * sizeZ;
+  int x_count = x * sizeX * sizeY * sizeZ;
+
+    return tensor[x_count + y_count + z_count + b];
     return 0.0;
 }
 
 inline void fourDimWrite(std::vector<float> &tensor, int &x, int &y, int &z, int &b, 
         const int &sizeX, const int &sizeY, const int &sizeZ, float &val) {
+
+  int z_count = z * sizeZ;
+  int y_count = y * sizeY * sizeZ;
+  int x_count = x * sizeX * sizeY * sizeZ;
+
+  tensor[x_count + y_count + z_count + b] = val;
     return; 
 }
 
@@ -123,6 +135,63 @@ torch::Tensor myNaiveAttention(torch::Tensor QTensor, torch::Tensor KTensor, tor
     */
     
     // -------- YOUR CODE HERE  -------- //
+    for (int b = 0; b < B; b++) {
+       //loop over Heads
+       for (int h = 0; h < H; h++) {
+          //loop over Sequence Length
+          for (int i = 0; i < N; i++) {
+            for(int seq_i=0; seq_i < N; seq_i++) {
+             //loop over Embedding Dimensionality
+              float val = 0.0;
+               for (int j = 0; j < d; j++) {
+                  int q_row  = i; 
+                  int q_col = j;
+                  int k_row = seq_i;
+                  int k_col = j;
+                  // float val = fourDimRead(Q, b, h, i, j, H, N, d);
+                  float q_val = fourDimRead(Q, b, h, q_row, q_col, H, N, d);
+                  float k_val = fourDimRead(K, b, h, k_row, k_col, H, N, d);
+                  val += q_val * k_val;
+               }
+              twoDimWrite(QK_t, i, seq_i, N, val );
+            }
+
+           }
+            for(int row_idx=0; row_idx < N; row_idx++) {
+              std::vector<double> tmp_row_res(N, 0.0);
+              double row_sum = 0.0;
+              for(int cold_idx=0; cold_idx < N ;cold_idx++) {
+                 float val = twoDimRead(QK_t, row_idx, cold_idx, N);
+                double exp_val = std::exp(val);
+                row_sum += exp_val;
+                tmp_row_res[cold_idx] = exp_val;
+              }
+              for(int cold_idx=0; cold_idx < N ; cold_idx++) {
+                float prob = tmp_row_res[cold_idx] / row_sum;
+                twoDimWrite(QK_t, row_idx, cold_idx, N, prob);
+              }
+            }
+
+
+            for(int qkt_row_idx=0; qkt_row_idx < N; qkt_row_idx++) {
+            for(int output_d_idx=0; output_d_idx < d; output_d_idx++) {
+              float val =0.0;
+              for(int m_idx=0; m_idx < N ; m_idx++) {
+                float qkt_val =  twoDimRead(QK_t, qkt_row_idx, m_idx, N);
+                int v_row = m_idx;
+                int v_col = output_d_idx;
+                float v_val = fourDimRead(V, b, h, v_row, v_col, H, N, d);
+                val += qkt_val * v_val;
+              }
+              fourDimWrite(O, b, h, qkt_row_idx, output_d_idx, H, N, d ,val);
+            }
+            }
+       }
+   }
+
+
+
+
     
     // DO NOT EDIT THIS RETURN STATEMENT //
     // It formats your C++ Vector O back into a Tensor of Shape (B, H, N, d) and returns it //

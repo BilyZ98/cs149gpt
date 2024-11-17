@@ -13,6 +13,16 @@ from torch.utils.cpp_extension import load
 from torch.profiler import profile, record_function, ProfilerActivity
 import module_ref as ms
 
+
+# Check if CUDA is available
+if torch.cuda.is_available():
+    device = torch.device("cuda")
+else:
+    device = torch.device("cpu")
+
+# Force using CPU
+device = torch.device("cpu")
+
 NUM_THREADS=8
 torch.set_num_threads(NUM_THREADS)
 
@@ -158,12 +168,14 @@ def testTemplate(customFunc, params, test_key):
     end = time.time()
     pytorch_time = end - start
 
+    print("first row value:\n",QKV[0][0][0])
     with profile(activities=[ProfilerActivity.CPU],
             profile_memory=True, record_shapes=True) as prof:
         with record_function("model_inference"):
             #compute with Naive Unfused 
             start = time.time()
             QKS1 = customFunc()
+            print("student first row:\n", QKS1[0][0][0])
             end = time.time()
             manual_time = end - start
     
