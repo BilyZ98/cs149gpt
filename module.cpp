@@ -203,29 +203,221 @@ torch::Tensor myNaiveAttention(torch::Tensor QTensor, torch::Tensor KTensor, tor
 //     PART 2: BLOCKED MATRIX MULTIPLY AND UNFUSED SOFTMAX    //
 // ---------------------------------------------------------- //
 
+#define TILE_SIZE 16
 torch::Tensor myUnfusedAttentionBlocked(torch::Tensor QTensor, torch::Tensor KTensor, torch::Tensor VTensor, torch::Tensor QK_tTensor,
                 int B, int H, int N, int d){
-    
-    // Q, K, V are passed in with Shape: (B, H, N, d)
-    //QK^t Intermediate Tensor has Shape (N, N)
+  
+  // Q, K, V are passed in with Shape: (B, H, N, d)
+  //QK^t Intermediate Tensor has Shape (N, N)
 
-    //Make O Tensor with Shape (B, H, N, d) 
-    at::Tensor OTensor = at::zeros({B, H, N, d}, at::kFloat);
+  //Make O Tensor with Shape (B, H, N, d) 
+  at::Tensor OTensor = at::zeros({B, H, N, d}, at::kFloat);
 
-    //Format O, Q, K, and V tensors into 4D vectors
-    std::vector<float> O = formatTensor(OTensor);
-    std::vector<float> Q = formatTensor(QTensor);
-    std::vector<float> K = formatTensor(KTensor);
-    std::vector<float> V = formatTensor(VTensor);
+  //Format O, Q, K, and V tensors into 4D vectors
+  std::vector<float> O = formatTensor(OTensor);
+  std::vector<float> Q = formatTensor(QTensor);
+  std::vector<float> K = formatTensor(KTensor);
+  std::vector<float> V = formatTensor(VTensor);
 
-    //Format QK_t Tensor into a 2D vector.
-    std::vector<float> QK_t = formatTensor(QK_tTensor);
+  //Format QK_t Tensor into a 2D vector.
+  std::vector<float> QK_t = formatTensor(QK_tTensor);
 
-    // -------- YOUR CODE HERE  -------- //
+  // -------- YOUR CODE HERE  -------- //
+  for(int b=0; b < B; b++) {
+    for(int h=0; h < H; h++) {
 
-    // DO NOT EDIT THIS RETURN STATEMENT //
-    // It formats your C++ Vector O back into a Tensor of Shape (B, H, N, d) and returns it //
-    return torch::from_blob(O.data(), {B, H, N, d}, torch::TensorOptions().dtype(torch::kFloat32)).clone();
+      // incorrect
+      // for(int q_row_tile_idx=0; q_row_tile_idx < (N+TILE_SIZE-1)/TILE_SIZE; q_row_tile_idx++) {
+      //   // K is not transposed so we traverse k by row.
+      //   for(int k_row_tile_idx=0; k_row_tile_idx < (N+TILE_SIZE-1)/TILE_SIZE; k_row_tile_idx++ ) {
+      //     for(int d_col_tile_idx=0; d_col_tile_idx < (d+TILE_SIZE-1)/TILE_SIZE; d_col_tile_idx++ ) {
+      //       for(int tile_row_idx=0; tile_row_idx < TILE_SIZE; tile_row_idx++) {
+      //         // int out_row_idx = q_row_tile_idx * TILE_SIZE + tile_row_idx;
+      //         for(int tile_col_idx=0; tile_col_idx < TILE_SIZE; tile_col_idx++) {
+      //           int q_row_idx =q_row_tile_idx * TILE_SIZE + tile_row_idx; 
+      //           int k_row_idx = k_row_tile_idx * TILE_SIZE + tile_row_idx;
+      //           int d_idx = d_col_tile_idx *TILE_SIZE + tile_col_idx;
+      //           if(q_row_idx < N  && k_row_idx < N && d_idx < d) {
+      //             float q_tile_val = fourDimRead(Q, b, h, q_row_idx, d_idx, H, N, d);
+      //             float k_tile_val = fourDimRead(K, b, h, k_row_idx, d_idx, H, N, d);
+      //             float orig_val = twoDimRead(QK_t, q_row_idx, k_row_idx, N);
+      //             float val = q_tile_val * k_tile_val + orig_val;
+      //             twoDimWrite(QK_t, q_row_idx, k_row_idx, N, val );
+      //           }
+      //         }
+      //       }
+      //     }
+
+      //   }
+      // }
+      //
+
+      // correct
+      // for(int row_tile_idx=0; row_tile_idx < (N+TILE_SIZE-1)/TILE_SIZE; row_tile_idx++) {
+      //   for(int col_tile_idx=0; col_tile_idx < (N+TILE_SIZE-1)/TILE_SIZE; col_tile_idx++) {
+      //     for(int k_tile_idx=0; k_tile_idx < (d+TILE_SIZE-1)/TILE_SIZE; k_tile_idx++  ) {
+      //       for(int tile_row_idx=0; tile_row_idx < TILE_SIZE; tile_row_idx++) {
+      //         for(int tile_col_idx=0; tile_col_idx < TILE_SIZE; tile_col_idx++) {
+      //           int row_idx = row_tile_idx * TILE_SIZE + tile_row_idx;
+      //           int col_idx = col_tile_idx * TILE_SIZE + tile_col_idx;
+      //           if(row_idx >= N || col_idx >= N) {
+      //             continue;
+      //           }
+      //           float sum = twoDimRead(QK_t, row_idx, col_idx, N);
+
+      //           for(int k=0; k < TILE_SIZE; k++) {
+      //             int k_idx = k_tile_idx * TILE_SIZE + k;
+      //             if(k_idx >= d) break;
+      //             float q_val =  fourDimRead(Q,b, h, row_idx, k_idx, H, N, d);
+      //             float k_val = fourDimRead(K, b, h, col_idx, k_idx, H, N, d);
+      //             sum += q_val * k_val;
+      //           }
+      //           twoDimWrite(QK_t, row_idx, col_idx, N, sum);
+      //         }
+
+      //       }
+      //     }
+      //   }
+      // }
+
+      // correct with local buffer
+for (int row_tile_idx = 0; row_tile_idx < (N + TILE_SIZE - 1) / TILE_SIZE; row_tile_idx++) {
+    for (int col_tile_idx = 0; col_tile_idx < (N + TILE_SIZE - 1) / TILE_SIZE; col_tile_idx++) {
+        for (int k_tile_idx = 0; k_tile_idx < (d + TILE_SIZE - 1) / TILE_SIZE; k_tile_idx++) {
+
+            // Buffers for tile data
+            float Q_tile[TILE_SIZE][TILE_SIZE];
+            float K_tile[TILE_SIZE][TILE_SIZE];
+
+            // Preload Q and K tiles into local buffers
+            for (int tile_row_idx = 0; tile_row_idx < TILE_SIZE; tile_row_idx++) {
+                int row_idx = row_tile_idx * TILE_SIZE + tile_row_idx;
+                if (row_idx >= N) continue; // Skip out-of-bound rows
+
+                for (int k = 0; k < TILE_SIZE; k++) {
+                    int k_idx = k_tile_idx * TILE_SIZE + k;
+                    if (k_idx < d) {
+                        Q_tile[tile_row_idx][k] = fourDimRead(Q, b, h, row_idx, k_idx, H, N, d);
+                    } else {
+                        Q_tile[tile_row_idx][k] = 0.0f; // Fill with zero if out-of-bounds
+                    }
+                }
+            }
+
+            for (int tile_col_idx = 0; tile_col_idx < TILE_SIZE; tile_col_idx++) {
+                int col_idx = col_tile_idx * TILE_SIZE + tile_col_idx;
+                if (col_idx >= N) continue; // Skip out-of-bound columns
+
+                for (int k = 0; k < TILE_SIZE; k++) {
+                    int k_idx = k_tile_idx * TILE_SIZE + k;
+                    if (k_idx < d) {
+                        K_tile[tile_col_idx][k] = fourDimRead(K, b, h, col_idx, k_idx, H, N, d);
+                    } else {
+                        K_tile[tile_col_idx][k] = 0.0f; // Fill with zero if out-of-bounds
+                    }
+                }
+            }
+
+            // Compute the dot product for the current tile
+            for (int tile_row_idx = 0; tile_row_idx < TILE_SIZE; tile_row_idx++) {
+                int row_idx = row_tile_idx * TILE_SIZE + tile_row_idx;
+                if (row_idx >= N) continue; // Skip out-of-bound rows
+
+                for (int tile_col_idx = 0; tile_col_idx < TILE_SIZE; tile_col_idx++) {
+                    int col_idx = col_tile_idx * TILE_SIZE + tile_col_idx;
+                    if (col_idx >= N) continue; // Skip out-of-bound columns
+
+                    float sum = twoDimRead(QK_t, row_idx, col_idx, N);
+
+                    // Unrolled loop for vectorized dot product
+                    for (int k = 0; k < TILE_SIZE; k++) {
+                        sum += Q_tile[tile_row_idx][k] * K_tile[tile_col_idx][k];
+                    }
+
+                    twoDimWrite(QK_t, row_idx, col_idx, N, sum);
+                }
+            }
+        }
+    }
+}
+
+
+
+      // also correct
+//       for (int q_row_tile_idx = 0; q_row_tile_idx < (N + TILE_SIZE - 1) / TILE_SIZE; q_row_tile_idx++) {
+//     for (int k_row_tile_idx = 0; k_row_tile_idx < (N + TILE_SIZE - 1) / TILE_SIZE; k_row_tile_idx++) {
+//         for (int d_col_tile_idx = 0; d_col_tile_idx < (d + TILE_SIZE - 1) / TILE_SIZE; d_col_tile_idx++) {
+//             for (int tile_row_idx = 0; tile_row_idx < TILE_SIZE; tile_row_idx++) {
+//                 for (int tile_col_idx = 0; tile_col_idx < TILE_SIZE; tile_col_idx++) {
+//                     int q_row_idx = q_row_tile_idx * TILE_SIZE + tile_row_idx;
+//                     int k_row_idx = k_row_tile_idx * TILE_SIZE + tile_col_idx; // Fix indexing
+//                     for (int d_idx = d_col_tile_idx * TILE_SIZE; d_idx < (d_col_tile_idx + 1) * TILE_SIZE; d_idx++) {
+//                         if (q_row_idx < N && k_row_idx < N && d_idx < d) {
+//                             float q_tile_val = fourDimRead(Q, b, h, q_row_idx, d_idx, H, N, d);
+//                             float k_tile_val = fourDimRead(K, b, h, k_row_idx, d_idx, H, N, d);
+//                             float orig_val = twoDimRead(QK_t, q_row_idx, k_row_idx, N);
+//                             float val = q_tile_val * k_tile_val + orig_val;
+//                             twoDimWrite(QK_t, q_row_idx, k_row_idx, N, val);
+//                         }
+//                     }
+//                 }
+//             }
+//         }
+//     }
+// }
+
+
+
+
+      for(int row_idx=0; row_idx < N; row_idx++) {
+        std::vector<double> tmp_row_res(N, 0.0);
+        double row_sum = 0.0;
+        for(int cold_idx=0; cold_idx < N ;cold_idx++) {
+           float val = twoDimRead(QK_t, row_idx, cold_idx, N);
+          double exp_val = std::exp(val);
+          row_sum += exp_val;
+          tmp_row_res[cold_idx] = exp_val;
+        }
+        for(int cold_idx=0; cold_idx < N ; cold_idx++) {
+          float prob = tmp_row_res[cold_idx] / row_sum;
+          twoDimWrite(QK_t, row_idx, cold_idx, N, prob);
+        }
+      }
+
+      for(int qkt_row_tile_idx=0; qkt_row_tile_idx < (N+TILE_SIZE-1)/TILE_SIZE; qkt_row_tile_idx++) {
+        for(int output_d_tile_idx=0; output_d_tile_idx < (d+TILE_SIZE-1)/TILE_SIZE; output_d_tile_idx++) {
+
+          for(int k_tile_idx=0; k_tile_idx < (N+TILE_SIZE-1)/TILE_SIZE; k_tile_idx++) {
+            for(int tile_row_idx=0; tile_row_idx < TILE_SIZE; tile_row_idx++) {
+                int out_row_idx = qkt_row_tile_idx * TILE_SIZE + tile_row_idx;
+              if(out_row_idx >= N) continue;
+              for(int tile_col_idx=0; tile_col_idx < TILE_SIZE; tile_col_idx++) {
+                int out_col_idx = output_d_tile_idx * TILE_SIZE + tile_col_idx;
+                if( out_col_idx >= d) continue;
+
+                float sum = fourDimRead(O, b, h, out_row_idx, out_col_idx, H, N, d );
+                for(int k=0; k < TILE_SIZE; k++) {
+                  int k_idx = k_tile_idx * TILE_SIZE + k;
+                  float qkt_val = twoDimRead(QK_t, out_row_idx, k_idx, N);
+                  float v_val = fourDimRead(V, b, h, k_idx, out_col_idx, H, N, d);
+                  sum += qkt_val * v_val; 
+                }
+                fourDimWrite(O, b, h, out_row_idx, out_col_idx, H, N, d, sum);
+              }
+            }
+          }
+        }
+      }
+
+
+    }
+
+  }
+
+
+  // DO NOT EDIT THIS RETURN STATEMENT //
+  // It formats your C++ Vector O back into a Tensor of Shape (B, H, N, d) and returns it //
+  return torch::from_blob(O.data(), {B, H, N, d}, torch::TensorOptions().dtype(torch::kFloat32)).clone();
 }
 
 
