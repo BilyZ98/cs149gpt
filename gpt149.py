@@ -116,9 +116,13 @@ def createQKVSimple(N,d,B,H):
         for h in range(H):
             for i in range(N):
                 for j in range(d):
-                    Q[b][h][i][j] = 0.0002 * i + 0.0001 * j
-                    K[b][h][j][i] = 0.0006 * i + 0.0003 * j
-                    V[b][h][i][j] = 0.00015 * i + 0.0008 * j
+                    Q[b][h][i][j] = 1
+                    K[b][h][j][i] = 1
+                    V[b][h][i][j] = 1
+
+                    # Q[b][h][i][j] = 0.0002 * i + 0.0001 * j
+                    # K[b][h][j][i] = 0.0006 * i + 0.0003 * j
+                    # V[b][h][i][j] = 0.00015 * i + 0.0008 * j
     K=K.transpose(-2,-1)
     return Q,K,V
 
@@ -168,17 +172,27 @@ def testTemplate(customFunc, params, test_key):
     end = time.time()
     pytorch_time = end - start
 
-    print("first row value:\n",QKV[0][0][0])
+    print("first row value:\n",QKV[0][0][-1])
     with profile(activities=[ProfilerActivity.CPU],
             profile_memory=True, record_shapes=True) as prof:
         with record_function("model_inference"):
             #compute with Naive Unfused 
             start = time.time()
             QKS1 = customFunc()
-            print("student first row:\n", QKS1[0][0][0])
+            print("student first row:\n", QKS1[0][0][-1])
             end = time.time()
             manual_time = end - start
     
+    # Check for equality within the specified tolerance
+    if not torch.allclose(QKV, QKS1, atol=1e-4):
+        # Find the indices where the two tensors are not close
+        diff_indices = torch.nonzero(~torch.isclose(QKV, QKS1, atol=1e-4), as_tuple=False)
+        # Print or log the indices and the corresponding values for debugging
+        for idx in diff_indices:
+            i, j, k, l = idx  # Adjust based on the number of dimensions in QKV
+            print(f"Mismatch at index ({i}, {j}, {k}, {l}): QKV={QKV[i, j, k, l]}, QKS1={QKS1[i, j, k, l]}")
+        raise AssertionError(correctness_error_message)
+
     assert torch.allclose(QKV,QKS1, atol=1e-4), correctness_error_message
     print("manual attention == pytorch attention",torch.allclose(QKV,QKS1, atol=1e-4)) 
     #print("Pytorch Execution Time:", pytorch_time, "\n")
